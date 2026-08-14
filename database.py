@@ -44,6 +44,18 @@ def init_db():
                 UNIQUE(user_id, coin_id)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tracked_nfts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                nft_id TEXT NOT NULL,
+                alert_percent REAL DEFAULT 5.0,
+                last_floor_price REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id),
+                UNIQUE(user_id, nft_id)
+            )
+        """)
 
 
 def get_or_create_user(user_id: int, username: str = None) -> sqlite3.Row:
@@ -140,4 +152,54 @@ def get_all_tracked_coins() -> list:
     """Для фоновой задачи проверки цен — все записи всех юзеров."""
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM tracked_coins").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_tracked_nfts(user_id: int) -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM tracked_nfts WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_tracked_nft(user_id: int, nft_id: str, alert_percent: float = 5.0) -> bool:
+    """Возвращает False, если у юзера уже лимит коллекций (для не-премиум)."""
+    FREE_LIMIT = 3
+    with get_db() as conn:
+        if not is_premium(user_id):
+            count = conn.execute(
+                "SELECT COUNT(*) as c FROM tracked_nfts WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()["c"]
+            if count >= FREE_LIMIT:
+                return False
+        conn.execute(
+            """INSERT OR IGNORE INTO tracked_nfts (user_id, nft_id, alert_percent)
+               VALUES (?, ?, ?)""",
+            (user_id, nft_id, alert_percent),
+        )
+        return True
+
+
+def remove_tracked_nft(user_id: int, nft_id: str):
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM tracked_nfts WHERE user_id = ? AND nft_id = ?",
+            (user_id, nft_id),
+        )
+
+
+def update_last_nft_price(user_id: int, nft_id: str, floor_price: float):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE tracked_nfts SET last_floor_price = ? WHERE user_id = ? AND nft_id = ?",
+            (floor_price, user_id, nft_id),
+        )
+
+
+def get_all_tracked_nfts() -> list:
+    """Для фоновой задачи проверки цен — все записи всех юзеров."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM tracked_nfts").fetchall()
         return [dict(r) for r in rows]
