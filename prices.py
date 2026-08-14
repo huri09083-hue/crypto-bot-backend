@@ -13,6 +13,11 @@ import httpx
 COINGECKO_BASE = "https://api.coingecko.com/api/v3"
 CACHE_TTL = 60  # секунд — как часто реально обновлять цены с CoinGecko
 
+# Демо-ключ CoinGecko — привязывает лимит запросов к ключу, а не к IP хостинга.
+# Получить свой можно бесплатно на coingecko.com/en/api/pricing (план Demo).
+COINGECKO_API_KEY = "CG-zv7TmLszxZxd4hFLLBMLAe5G"
+_HEADERS = {"x-cg-demo-api-key": COINGECKO_API_KEY}
+
 # Топ монет для отображения по умолчанию в Mini App
 POPULAR_COINS = [
     "bitcoin", "ethereum", "the-open-network", "solana",
@@ -47,7 +52,7 @@ async def get_prices(coin_ids: list[str]) -> dict:
     }
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(url, params=params)
+            resp = await client.get(url, params=params, headers=_HEADERS)
             resp.raise_for_status()
             data = resp.json()
             _cache[cache_key] = (now, data)
@@ -64,7 +69,7 @@ async def search_coin(query: str) -> list[dict]:
     """Поиск монеты по названию, для добавления в отслеживание."""
     url = f"{COINGECKO_BASE}/search"
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(url, params={"query": query})
+        resp = await client.get(url, params={"query": query}, headers=_HEADERS)
         resp.raise_for_status()
         data = resp.json()
         coins = data.get("coins", [])[:5]
