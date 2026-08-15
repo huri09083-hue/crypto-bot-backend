@@ -113,8 +113,8 @@ def root():
 
 @app.get("/popular")
 async def popular_coins():
-    """Список популярных монет с текущими ценами — для главного экрана."""
-    return await prices.get_popular_with_prices()
+    """Список популярных монет с текущими ценами и иконками — для главного экрана."""
+    return await prices.get_popular_with_images()
 
 
 @app.get("/search")
