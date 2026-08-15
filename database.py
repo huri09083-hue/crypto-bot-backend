@@ -40,6 +40,7 @@ def init_db():
                 coin_id TEXT NOT NULL,
                 alert_percent REAL DEFAULT 5.0,
                 last_price REAL,
+                last_checked_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, coin_id)
@@ -52,6 +53,7 @@ def init_db():
                 nft_id TEXT NOT NULL,
                 alert_percent REAL DEFAULT 5.0,
                 last_floor_price REAL,
+                last_checked_at TEXT,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, nft_id)
@@ -203,15 +205,23 @@ def remove_tracked_coin(user_id: int, coin_id: str):
 def update_last_price(user_id: int, coin_id: str, price: float):
     with get_db() as conn:
         conn.execute(
-            "UPDATE tracked_coins SET last_price = ? WHERE user_id = ? AND coin_id = ?",
+            """UPDATE tracked_coins SET last_price = ?, last_checked_at = CURRENT_TIMESTAMP
+               WHERE user_id = ? AND coin_id = ?""",
             (price, user_id, coin_id),
         )
 
 
 def get_all_tracked_coins() -> list:
-    """Для фоновой задачи проверки цен — все записи всех юзеров."""
+    """
+    Для фоновой задачи проверки цен — все записи всех юзеров, вместе с их
+    премиум-статусом (нужно боту, чтобы решить, как часто проверять).
+    """
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM tracked_coins").fetchall()
+        rows = conn.execute("""
+            SELECT tc.*, u.is_premium AS user_is_premium, u.premium_until AS user_premium_until
+            FROM tracked_coins tc
+            JOIN users u ON tc.user_id = u.user_id
+        """).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -253,15 +263,23 @@ def remove_tracked_nft(user_id: int, nft_id: str):
 def update_last_nft_price(user_id: int, nft_id: str, floor_price: float):
     with get_db() as conn:
         conn.execute(
-            "UPDATE tracked_nfts SET last_floor_price = ? WHERE user_id = ? AND nft_id = ?",
+            """UPDATE tracked_nfts SET last_floor_price = ?, last_checked_at = CURRENT_TIMESTAMP
+               WHERE user_id = ? AND nft_id = ?""",
             (floor_price, user_id, nft_id),
         )
 
 
 def get_all_tracked_nfts() -> list:
-    """Для фоновой задачи проверки цен — все записи всех юзеров."""
+    """
+    Для фоновой задачи проверки цен — все записи всех юзеров, вместе с их
+    премиум-статусом (нужно боту, чтобы решить, как часто проверять).
+    """
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM tracked_nfts").fetchall()
+        rows = conn.execute("""
+            SELECT tn.*, u.is_premium AS user_is_premium, u.premium_until AS user_premium_until
+            FROM tracked_nfts tn
+            JOIN users u ON tn.user_id = u.user_id
+        """).fetchall()
         return [dict(r) for r in rows]
 
 
