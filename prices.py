@@ -74,7 +74,7 @@ async def search_coin(query: str) -> list[dict]:
         data = resp.json()
         coins = data.get("coins", [])[:5]
         return [
-            {"id": c["id"], "name": c["name"], "symbol": c["symbol"]}
+            {"id": c["id"], "name": c["name"], "symbol": c["symbol"], "image": c.get("thumb")}
             for c in coins
         ]
 
@@ -89,5 +89,50 @@ async def get_popular_with_prices() -> list[dict]:
             "id": coin_id,
             "price": p.get("usd"),
             "change_24h": p.get("usd_24h_change"),
+        })
+    return result
+
+
+async def get_popular_with_images() -> list[dict]:
+    """
+    То же самое, но через /coins/markets — там, в отличие от /simple/price,
+    сразу приходит иконка монеты. Используется для красивого отображения
+    в списке (аватарки монет вместо буквы-заглушки).
+    """
+    ids_param = ",".join(POPULAR_COINS)
+    cache_key = f"markets:{ids_param}"
+    now = time.time()
+
+    cached = _cache.get(cache_key)
+    if cached and (now - cached[0]) < CACHE_TTL:
+        data = cached[1]
+    else:
+        url = f"{COINGECKO_BASE}/coins/markets"
+        params = {
+            "vs_currency": "usd",
+            "ids": ids_param,
+            "price_change_percentage": "24h",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, params=params, headers=_HEADERS)
+                resp.raise_for_status()
+                data = resp.json()
+                _cache[cache_key] = (now, data)
+        except httpx.HTTPStatusError:
+            data = cached[1] if cached else []
+
+    by_id = {c["id"]: c for c in data}
+    result = []
+    for coin_id in POPULAR_COINS:
+        c = by_id.get(coin_id)
+        if not c:
+            result.append({"id": coin_id, "price": None, "change_24h": None, "image": None})
+            continue
+        result.append({
+            "id": coin_id,
+            "price": c.get("current_price"),
+            "change_24h": c.get("price_change_percentage_24h"),
+            "image": c.get("image"),
         })
     return result
