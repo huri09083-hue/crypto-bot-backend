@@ -18,12 +18,6 @@ CACHE_TTL = 60  # секунд — как часто реально обновл
 COINGECKO_API_KEY = "CG-zv7TmLszxZxd4hFLLBMLAe5G"
 _HEADERS = {"x-cg-demo-api-key": COINGECKO_API_KEY}
 
-# Топ монет для отображения по умолчанию в Mini App
-POPULAR_COINS = [
-    "bitcoin", "ethereum", "the-open-network", "solana",
-    "binancecoin", "ripple", "dogecoin", "cardano", "tron", "avalanche-2",
-]
-
 # Простой кэш в памяти: {ключ_запроса: (время_записи, данные)}
 _cache: dict[str, tuple[float, dict]] = {}
 
@@ -66,41 +60,46 @@ async def get_prices(coin_ids: list[str]) -> dict:
 
 
 async def search_coin(query: str) -> list[dict]:
-    """Поиск монеты по названию, для добавления в отслеживание."""
+    """
+    Поиск монеты по названию, для добавления в отслеживание.
+    Сам поиск CoinGecko цену не отдаёт — дозапрашиваем её отдельно
+    и склеиваем с результатом, чтобы в списке сразу была видна цена.
+    """
     url = f"{COINGECKO_BASE}/search"
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(url, params={"query": query}, headers=_HEADERS)
         resp.raise_for_status()
         data = resp.json()
-        coins = data.get("coins", [])[:5]
-        return [
-            {"id": c["id"], "name": c["name"], "symbol": c["symbol"], "image": c.get("thumb")}
-            for c in coins
-        ]
+        coins = data.get("coins", [])[:8]
 
+    if not coins:
+        return []
 
-async def get_popular_with_prices() -> list[dict]:
-    """Список популярных монет с ценами — для главного экрана Mini App."""
-    prices = await get_prices(POPULAR_COINS)
+    ids = [c["id"] for c in coins]
+    price_data = await get_prices(ids)
+
     result = []
-    for coin_id in POPULAR_COINS:
-        p = prices.get(coin_id, {})
+    for c in coins:
+        p = price_data.get(c["id"], {})
         result.append({
-            "id": coin_id,
+            "id": c["id"],
+            "name": c["name"],
+            "symbol": c["symbol"],
+            "image": c.get("thumb"),
             "price": p.get("usd"),
             "change_24h": p.get("usd_24h_change"),
         })
     return result
 
 
-async def get_popular_with_images() -> list[dict]:
+async def get_top_coins(limit: int = 100) -> list[dict]:
     """
-    То же самое, но через /coins/markets — там, в отличие от /simple/price,
-    сразу приходит иконка монеты. Используется для красивого отображения
-    в списке (аватарки монет вместо буквы-заглушки).
+    Топ монет по капитализации — для главного экрана Mini App.
+    Вместо фиксированного списка из десятка монет показываем топ-100,
+    этого достаточно для подавляющего большинства случаев; для более
+    редких монет юзер может воспользоваться поиском.
     """
-    ids_param = ",".join(POPULAR_COINS)
-    cache_key = f"markets:{ids_param}"
+    cache_key = f"top:{limit}"
     now = time.time()
 
     cached = _cache.get(cache_key)
@@ -110,11 +109,13 @@ async def get_popular_with_images() -> list[dict]:
         url = f"{COINGECKO_BASE}/coins/markets"
         params = {
             "vs_currency": "usd",
-            "ids": ids_param,
+            "order": "market_cap_desc",
+            "per_page": limit,
+            "page": 1,
             "price_change_percentage": "24h",
         }
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(url, params=params, headers=_HEADERS)
                 resp.raise_for_status()
                 data = resp.json()
@@ -122,17 +123,14 @@ async def get_popular_with_images() -> list[dict]:
         except httpx.HTTPStatusError:
             data = cached[1] if cached else []
 
-    by_id = {c["id"]: c for c in data}
-    result = []
-    for coin_id in POPULAR_COINS:
-        c = by_id.get(coin_id)
-        if not c:
-            result.append({"id": coin_id, "price": None, "change_24h": None, "image": None})
-            continue
-        result.append({
-            "id": coin_id,
+    return [
+        {
+            "id": c["id"],
+            "name": c.get("name"),
+            "symbol": c.get("symbol"),
             "price": c.get("current_price"),
             "change_24h": c.get("price_change_percentage_24h"),
             "image": c.get("image"),
-        })
-    return result
+        }
+        for c in data
+    ]
