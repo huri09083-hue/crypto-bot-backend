@@ -11,6 +11,11 @@ from pydantic import BaseModel
 import database as db
 import prices
 import nft
+import os
+
+# Секретный ключ для служебных эндпоинтов (выдача премиума напрямую).
+# Без него /premium/grant мог бы вызвать кто угодно и получить премиум бесплатно.
+ADMIN_SECRET = os.environ.get("ADMIN_SECRET", "смени-меня-в-render-environment")
 
 app = FastAPI(title="Crypto Tracker API")
 
@@ -62,6 +67,11 @@ class SetNftAlertRequest(BaseModel):
     user_id: int
     nft_id: str
     alert_percent: float
+
+
+class PromoRequest(BaseModel):
+    user_id: int
+    code: str
 
 
 @app.get("/")
@@ -143,8 +153,10 @@ def remove_nft(req: RemoveNftRequest):
 
 
 @app.post("/premium/grant")
-def grant_premium(user_id: int, days: int = 30):
-    """Вызывается ботом после успешной оплаты Stars."""
+def grant_premium(user_id: int, days: int = 30, secret: str = ""):
+    """Служебный эндпоинт — требует ADMIN_SECRET, иначе кто угодно мог бы выдать себе премиум."""
+    if secret != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Неверный секретный ключ")
     db.grant_premium(user_id, days)
     return {"success": True}
 
@@ -175,3 +187,13 @@ def set_nft_alert(req: SetNftAlertRequest):
 def get_alerts(user_id: int):
     """История последних сработавших алертов — для раздела «Алерты»."""
     return db.get_recent_alerts(user_id)
+
+
+@app.post("/promo/redeem")
+def redeem_promo(req: PromoRequest):
+    """Активирует промокод — премиум создаёт/продлевает бот-модуль database.py."""
+    db.get_or_create_user(req.user_id)
+    result = db.redeem_promo_code(req.user_id, req.code)
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result["message"])
+    return result
