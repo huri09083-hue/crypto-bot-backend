@@ -29,6 +29,7 @@ def init_db():
                 username TEXT,
                 is_premium INTEGER DEFAULT 0,
                 premium_until TEXT,
+                default_alert_percent REAL DEFAULT 5.0,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -54,6 +55,19 @@ def init_db():
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, nft_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS alert_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                item_type TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                item_name TEXT,
+                change_percent REAL,
+                price REAL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
             )
         """)
 
@@ -202,4 +216,58 @@ def get_all_tracked_nfts() -> list:
     """Для фоновой задачи проверки цен — все записи всех юзеров."""
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM tracked_nfts").fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_default_alert_percent(user_id: int) -> float:
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT default_alert_percent FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return row["default_alert_percent"] if row else 5.0
+
+
+def set_default_alert_percent(user_id: int, percent: float):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE users SET default_alert_percent = ? WHERE user_id = ?",
+            (percent, user_id),
+        )
+
+
+def set_coin_alert_percent(user_id: int, coin_id: str, percent: float):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE tracked_coins SET alert_percent = ? WHERE user_id = ? AND coin_id = ?",
+            (percent, user_id, coin_id),
+        )
+
+
+def set_nft_alert_percent(user_id: int, nft_id: str, percent: float):
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE tracked_nfts SET alert_percent = ? WHERE user_id = ? AND nft_id = ?",
+            (percent, user_id, nft_id),
+        )
+
+
+def log_alert(user_id: int, item_type: str, item_id: str, item_name: str,
+              change_percent: float, price: float):
+    """item_type: 'coin' или 'nft' — сохраняет запись для истории в разделе «Алерты»."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT INTO alert_log (user_id, item_type, item_id, item_name, change_percent, price)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (user_id, item_type, item_id, item_name, change_percent, price),
+        )
+
+
+def get_recent_alerts(user_id: int, limit: int = 30) -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT * FROM alert_log WHERE user_id = ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (user_id, limit),
+        ).fetchall()
         return [dict(r) for r in rows]
