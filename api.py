@@ -74,6 +74,38 @@ class PromoRequest(BaseModel):
     code: str
 
 
+class CreatePromoRequest(BaseModel):
+    secret: str
+    code: str
+    days: int
+    max_uses: int | None = None
+
+
+class LogAlertRequest(BaseModel):
+    secret: str
+    user_id: int
+    item_type: str
+    item_id: str
+    item_name: str
+    change_percent: float
+    price: float
+
+
+class UpdatePriceRequest(BaseModel):
+    secret: str
+    user_id: int
+    item_id: str
+    price: float
+
+
+class LogPaymentRequest(BaseModel):
+    secret: str
+    user_id: int
+    telegram_charge_id: str
+    amount_stars: int
+    days_granted: int
+
+
 @app.get("/")
 def root():
     return {"status": "ok"}
@@ -197,3 +229,57 @@ def redeem_promo(req: PromoRequest):
     if not result["success"]:
         raise HTTPException(status_code=400, detail=result["message"])
     return result
+
+
+# ---- Служебные эндпоинты для бота (фоновая проверка цен, админ-команды) ----
+# Всё под секретным ключом: эти ручки видят/меняют данные всех юзеров сразу,
+# в отличие от обычных ручек выше, которые работают в рамках одного user_id.
+
+def _check_secret(secret: str):
+    if secret != ADMIN_SECRET:
+        raise HTTPException(status_code=403, detail="Неверный секретный ключ")
+
+
+@app.get("/admin/tracked")
+def admin_get_tracked(secret: str):
+    """Все отслеживаемые монеты и NFT всех юзеров — для фоновой проверки алертов."""
+    _check_secret(secret)
+    return {
+        "coins": db.get_all_tracked_coins(),
+        "nfts": db.get_all_tracked_nfts(),
+    }
+
+
+@app.post("/admin/update_coin_price")
+def admin_update_coin_price(req: UpdatePriceRequest):
+    _check_secret(req.secret)
+    db.update_last_price(req.user_id, req.item_id, req.price)
+    return {"success": True}
+
+
+@app.post("/admin/update_nft_price")
+def admin_update_nft_price(req: UpdatePriceRequest):
+    _check_secret(req.secret)
+    db.update_last_nft_price(req.user_id, req.item_id, req.price)
+    return {"success": True}
+
+
+@app.post("/admin/log_alert")
+def admin_log_alert(req: LogAlertRequest):
+    _check_secret(req.secret)
+    db.log_alert(req.user_id, req.item_type, req.item_id, req.item_name, req.change_percent, req.price)
+    return {"success": True}
+
+
+@app.post("/admin/log_payment")
+def admin_log_payment(req: LogPaymentRequest):
+    _check_secret(req.secret)
+    is_new = db.log_payment(req.user_id, req.telegram_charge_id, req.amount_stars, req.days_granted)
+    return {"is_new": is_new}
+
+
+@app.post("/admin/create_promo")
+def admin_create_promo(req: CreatePromoRequest):
+    _check_secret(req.secret)
+    ok = db.create_promo_code(req.code, req.days, req.max_uses)
+    return {"success": ok}
