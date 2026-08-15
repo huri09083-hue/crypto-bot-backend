@@ -47,6 +47,23 @@ class RemoveNftRequest(BaseModel):
     nft_id: str
 
 
+class SettingsRequest(BaseModel):
+    user_id: int
+    default_alert_percent: float
+
+
+class SetCoinAlertRequest(BaseModel):
+    user_id: int
+    coin_id: str
+    alert_percent: float
+
+
+class SetNftAlertRequest(BaseModel):
+    user_id: int
+    nft_id: str
+    alert_percent: float
+
+
 @app.get("/")
 def root():
     return {"status": "ok"}
@@ -73,6 +90,8 @@ def get_user(user_id: int):
     return {
         "user_id": user_id,
         "is_premium": db.is_premium(user_id),
+        "premium_until": user.get("premium_until"),
+        "default_alert_percent": user.get("default_alert_percent", 5.0),
         "tracked_coins": tracked_coins,
         "tracked_nfts": tracked_nfts,
         "free_limit": 3,
@@ -82,7 +101,8 @@ def get_user(user_id: int):
 @app.post("/track")
 def add_coin(req: AddCoinRequest):
     db.get_or_create_user(req.user_id)
-    ok = db.add_tracked_coin(req.user_id, req.coin_id, req.alert_percent)
+    percent = req.alert_percent if req.alert_percent != 5.0 else db.get_default_alert_percent(req.user_id)
+    ok = db.add_tracked_coin(req.user_id, req.coin_id, percent)
     if not ok:
         raise HTTPException(
             status_code=403,
@@ -106,7 +126,8 @@ async def popular_nfts():
 @app.post("/nfts/track")
 def add_nft(req: AddNftRequest):
     db.get_or_create_user(req.user_id)
-    ok = db.add_tracked_nft(req.user_id, req.nft_id, req.alert_percent)
+    percent = req.alert_percent if req.alert_percent != 5.0 else db.get_default_alert_percent(req.user_id)
+    ok = db.add_tracked_nft(req.user_id, req.nft_id, percent)
     if not ok:
         raise HTTPException(
             status_code=403,
@@ -126,3 +147,31 @@ def grant_premium(user_id: int, days: int = 30):
     """Вызывается ботом после успешной оплаты Stars."""
     db.grant_premium(user_id, days)
     return {"success": True}
+
+
+@app.post("/settings")
+def update_settings(req: SettingsRequest):
+    """Обновляет порог % по умолчанию для новых отслеживаний."""
+    db.get_or_create_user(req.user_id)
+    db.set_default_alert_percent(req.user_id, req.default_alert_percent)
+    return {"success": True}
+
+
+@app.post("/track/alert")
+def set_coin_alert(req: SetCoinAlertRequest):
+    """Меняет порог % у уже отслеживаемой монеты."""
+    db.set_coin_alert_percent(req.user_id, req.coin_id, req.alert_percent)
+    return {"success": True}
+
+
+@app.post("/nfts/track/alert")
+def set_nft_alert(req: SetNftAlertRequest):
+    """Меняет порог % у уже отслеживаемой NFT-коллекции."""
+    db.set_nft_alert_percent(req.user_id, req.nft_id, req.alert_percent)
+    return {"success": True}
+
+
+@app.get("/alerts/{user_id}")
+def get_alerts(user_id: int):
+    """История последних сработавших алертов — для раздела «Алерты»."""
+    return db.get_recent_alerts(user_id)
