@@ -70,6 +70,36 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                telegram_charge_id TEXT UNIQUE,
+                amount_stars INTEGER NOT NULL,
+                days_granted INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS promo_codes (
+                code TEXT PRIMARY KEY,
+                days INTEGER NOT NULL,
+                max_uses INTEGER,
+                used_count INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS promo_redemptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                redeemed_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, code)
+            )
+        """)
 
 
 def get_or_create_user(user_id: int, username: str = None) -> sqlite3.Row:
@@ -111,8 +141,24 @@ def is_premium(user_id: int) -> bool:
 
 
 def grant_premium(user_id: int, days: int = 30):
-    until = (datetime.now() + timedelta(days=days)).isoformat()
+    """
+    Выдаёт/продлевает премиум. Если премиум уже активен — дни добавляются
+    к текущей дате окончания, а не затирают её (иначе повторная покупка
+    или промокод отняли бы уже оплаченные дни).
+    """
     with get_db() as conn:
+        user = conn.execute(
+            "SELECT premium_until, is_premium FROM users WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+        base = datetime.now()
+        if user and user["is_premium"] and user["premium_until"]:
+            current_until = datetime.fromisoformat(user["premium_until"])
+            if current_until > base:
+                base = current_until
+
+        until = (base + timedelta(days=days)).isoformat()
         conn.execute(
             "UPDATE users SET is_premium = 1, premium_until = ? WHERE user_id = ?",
             (until, user_id),
@@ -271,3 +317,88 @@ def get_recent_alerts(user_id: int, limit: int = 30) -> list:
             (user_id, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def log_payment(user_id: int, telegram_charge_id: str, amount_stars: int, days_granted: int) -> bool:
+    """
+    Сохраняет платёж для аудита. Возвращает False, если такой charge_id
+    уже был записан раньше — защита от повторной обработки одного и
+    того же платежа (Telegram иногда может повторно прислать апдейт).
+    """
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM payments WHERE telegram_charge_id = ?",
+            (telegram_charge_id,),
+        ).fetchone()
+        if existing:
+            return False
+        conn.execute(
+            """INSERT INTO payments (user_id, telegram_charge_id, amount_stars, days_granted)
+               VALUES (?, ?, ?, ?)""",
+            (user_id, telegram_charge_id, amount_stars, days_granted),
+        )
+        return True
+
+
+def get_user_payments(user_id: int) -> list:
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_promo_code(code: str, days: int, max_uses: int | None = None) -> bool:
+    """Создаёт новый промокод. Возвращает False, если код уже существует."""
+    with get_db() as conn:
+        existing = conn.execute(
+            "SELECT code FROM promo_codes WHERE code = ?", (code,)
+        ).fetchone()
+        if existing:
+            return False
+        conn.execute(
+            "INSERT INTO promo_codes (code, days, max_uses) VALUES (?, ?, ?)",
+            (code, days, max_uses),
+        )
+        return True
+
+
+def redeem_promo_code(user_id: int, code: str) -> dict:
+    """
+    Пытается активировать промокод для юзера.
+    Возвращает {"success": bool, "message": str, "days": int|None}.
+    """
+    code = code.strip().upper()
+    with get_db() as conn:
+        promo = conn.execute(
+            "SELECT * FROM promo_codes WHERE code = ?", (code,)
+        ).fetchone()
+
+        if not promo:
+            return {"success": False, "message": "Промокод не найден"}
+        if not promo["active"]:
+            return {"success": False, "message": "Этот промокод больше не активен"}
+        if promo["max_uses"] is not None and promo["used_count"] >= promo["max_uses"]:
+            return {"success": False, "message": "Промокод исчерпан"}
+
+        already_used = conn.execute(
+            "SELECT id FROM promo_redemptions WHERE user_id = ? AND code = ?",
+            (user_id, code),
+        ).fetchone()
+        if already_used:
+            return {"success": False, "message": "Ты уже использовал этот промокод"}
+
+        conn.execute(
+            "INSERT INTO promo_redemptions (user_id, code) VALUES (?, ?)",
+            (user_id, code),
+        )
+        conn.execute(
+            "UPDATE promo_codes SET used_count = used_count + 1 WHERE code = ?",
+            (code,),
+        )
+        days = promo["days"]
+
+    # grant_premium открывает свою транзакцию — вызываем после закрытия предыдущей
+    grant_premium(user_id, days=days)
+    return {"success": True, "message": f"Промокод активирован! +{days} дней премиума", "days": days}
