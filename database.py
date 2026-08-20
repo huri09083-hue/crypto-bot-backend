@@ -463,3 +463,48 @@ def redeem_promo_code(user_id: int, code: str) -> dict:
     # grant_premium открывает свою транзакцию — вызываем после закрытия предыдущей
     grant_premium(user_id, days=days)
     return {"success": True, "message": f"Промокод активирован! +{days} дней премиума", "days": days}
+
+
+def get_stats() -> dict:
+    """Сводка для команды /stats: юзеры, премиум, выручка, отслеживания."""
+    with get_db() as conn:
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) as c FROM users")
+        total_users = cur.fetchone()["c"]
+
+        cur.execute("SELECT COUNT(*) as c FROM users WHERE is_premium = 1")
+        premium_users = cur.fetchone()["c"]
+
+        cur.execute("SELECT COALESCE(SUM(amount_stars), 0) as total, COUNT(*) as c FROM payments")
+        revenue_row = cur.fetchone()
+
+        cur.execute("SELECT COUNT(*) as c FROM tracked_coins")
+        tracked_coins = cur.fetchone()["c"]
+
+        cur.execute("SELECT COUNT(*) as c FROM tracked_nfts")
+        tracked_nfts = cur.fetchone()["c"]
+
+        day_ago = (datetime.now() - timedelta(days=1)).isoformat()
+        week_ago = (datetime.now() - timedelta(days=7)).isoformat()
+
+        cur.execute("SELECT COUNT(*) as c FROM users WHERE created_at >= %s", (day_ago,))
+        new_today = cur.fetchone()["c"]
+
+        cur.execute("SELECT COUNT(*) as c FROM users WHERE created_at >= %s", (week_ago,))
+        new_week = cur.fetchone()["c"]
+
+        cur.execute("SELECT COUNT(*) as c FROM promo_redemptions")
+        promo_redemptions = cur.fetchone()["c"]
+
+    return {
+        "total_users": total_users,
+        "premium_users": premium_users,
+        "total_revenue_stars": revenue_row["total"],
+        "total_payments": revenue_row["c"],
+        "tracked_coins": tracked_coins,
+        "tracked_nfts": tracked_nfts,
+        "new_users_today": new_today,
+        "new_users_week": new_week,
+        "promo_redemptions": promo_redemptions,
+    }
