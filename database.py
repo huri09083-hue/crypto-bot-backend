@@ -508,3 +508,11 @@ def get_stats() -> dict:
         "new_users_week": new_week,
         "promo_redemptions": promo_redemptions,
     }
+
+
+def get_all_user_ids() -> list[int]:
+    """Все user_id юзеров бота — для массовой рассылки."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM users")
+        return [r["user_id"] for r in cur.fetchall()]
