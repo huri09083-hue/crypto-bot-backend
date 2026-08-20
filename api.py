@@ -289,3 +289,10 @@ def admin_create_promo(req: CreatePromoRequest):
 def admin_stats(secret: str):
     _check_secret(secret)
     return db.get_stats()
+
+
+@app.get("/admin/users")
+def admin_get_users(secret: str):
+    """Все user_id юзеров — для массовой рассылки ботом."""
+    _check_secret(secret)
+    return db.get_all_user_ids()
