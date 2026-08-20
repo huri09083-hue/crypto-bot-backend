@@ -283,3 +283,9 @@ def admin_create_promo(req: CreatePromoRequest):
     _check_secret(req.secret)
     ok = db.create_promo_code(req.code, req.days, req.max_uses)
     return {"success": ok}
+
+
+@app.get("/admin/stats")
+def admin_stats(secret: str):
+    _check_secret(secret)
+    return db.get_stats()
