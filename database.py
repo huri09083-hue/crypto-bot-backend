@@ -16,24 +16,44 @@ from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 import psycopg2
+import psycopg2.pool
 from psycopg2.extras import RealDictCursor
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# Пул готовых соединений вместо "открыть новое → сделать запрос → закрыть"
+# на каждое действие. Новое соединение к Neon — это отдельное SSL-рукопожатие
+# каждый раз, что ощутимо тормозит на бесплатных тарифах; пул держит
+# несколько соединений открытыми и переиспользует их.
+_pool: psycopg2.pool.SimpleConnectionPool | None = None
+
+
+def _get_pool() -> psycopg2.pool.SimpleConnectionPool:
+    global _pool
+    if _pool is None:
+        if not DATABASE_URL:
+            raise RuntimeError(
+                "Не задана переменная окружения DATABASE_URL — укажи строку "
+                "подключения к PostgreSQL в настройках Render (Environment Variables)."
+            )
+        _pool = psycopg2.pool.SimpleConnectionPool(
+            1, 10, dsn=DATABASE_URL, cursor_factory=RealDictCursor,
+        )
+    return _pool
+
 
 @contextmanager
 def get_db():
-    if not DATABASE_URL:
-        raise RuntimeError(
-            "Не задана переменная окружения DATABASE_URL — укажи строку "
-            "подключения к PostgreSQL в настройках Render (Environment Variables)."
-        )
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()  # иначе соединение вернётся в пул "подвисшим" после ошибки
+        raise
     finally:
-        conn.close()
+        pool.putconn(conn)
 
 
 def _now() -> str:
