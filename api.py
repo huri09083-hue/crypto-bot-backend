@@ -69,6 +69,23 @@ class SetNftAlertRequest(BaseModel):
     alert_percent: float
 
 
+class SetCoinHoldingRequest(BaseModel):
+    user_id: int
+    coin_id: str
+    amount: float
+
+
+class SetNftHoldingRequest(BaseModel):
+    user_id: int
+    nft_id: str
+    amount: float
+
+
+class AddCustomNftRequest(BaseModel):
+    user_id: int
+    nft_id: str
+
+
 class PromoRequest(BaseModel):
     user_id: int
     code: str
@@ -104,6 +121,7 @@ class LogPaymentRequest(BaseModel):
     telegram_charge_id: str
     amount_stars: int
     days_granted: int
+    payment_type: str = "premium"
 
 
 @app.get("/")
@@ -165,6 +183,12 @@ async def popular_nfts():
     return await nft.get_popular_nfts()
 
 
+@app.get("/nfts/search")
+async def search_nfts(query: str):
+    """Поиск NFT-коллекции по названию — для платного добавления нестандартных."""
+    return await nft.search_nft(query)
+
+
 @app.post("/nfts/track")
 def add_nft(req: AddNftRequest):
     db.get_or_create_user(req.user_id)
@@ -175,6 +199,17 @@ def add_nft(req: AddNftRequest):
             status_code=403,
             detail="Достигнут лимит бесплатных коллекций (3). Оформи премиум для безлимита.",
         )
+    return {"success": True}
+
+
+@app.post("/nfts/track/custom")
+def add_custom_nft(req: AddCustomNftRequest):
+    """
+    Добавляет платно купленную нестандартную NFT-коллекцию — вызывается
+    ботом ПОСЛЕ успешной оплаты Stars, в обход обычного лимита в 3 коллекции.
+    """
+    db.get_or_create_user(req.user_id)
+    db.add_custom_nft_addon(req.user_id, req.nft_id)
     return {"success": True}
 
 
@@ -212,6 +247,20 @@ def set_coin_alert(req: SetCoinAlertRequest):
 def set_nft_alert(req: SetNftAlertRequest):
     """Меняет порог % у уже отслеживаемой NFT-коллекции."""
     db.set_nft_alert_percent(req.user_id, req.nft_id, req.alert_percent)
+    return {"success": True}
+
+
+@app.post("/track/holding")
+def set_coin_holding(req: SetCoinHoldingRequest):
+    """Сколько монеты юзер держит — для расчёта стоимости портфеля."""
+    db.set_coin_holding(req.user_id, req.coin_id, req.amount)
+    return {"success": True}
+
+
+@app.post("/nfts/track/holding")
+def set_nft_holding(req: SetNftHoldingRequest):
+    """Сколько NFT из коллекции юзер держит — для расчёта стоимости портфеля."""
+    db.set_nft_holding(req.user_id, req.nft_id, req.amount)
     return {"success": True}
 
 
@@ -274,7 +323,10 @@ def admin_log_alert(req: LogAlertRequest):
 @app.post("/admin/log_payment")
 def admin_log_payment(req: LogPaymentRequest):
     _check_secret(req.secret)
-    is_new = db.log_payment(req.user_id, req.telegram_charge_id, req.amount_stars, req.days_granted)
+    is_new = db.log_payment(
+        req.user_id, req.telegram_charge_id, req.amount_stars,
+        req.days_granted, req.payment_type,
+    )
     return {"is_new": is_new}
 
 
