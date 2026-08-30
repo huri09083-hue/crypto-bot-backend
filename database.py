@@ -85,11 +85,15 @@ def init_db():
                 alert_percent REAL DEFAULT 5.0,
                 last_price REAL,
                 last_checked_at TEXT,
+                holding_amount REAL DEFAULT 0,
                 created_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, coin_id)
             )
         """)
+        # ALTER на случай, если таблица уже существовала в базе до этого поля —
+        # CREATE TABLE IF NOT EXISTS новую колонку сама по себе не добавит.
+        cur.execute("ALTER TABLE tracked_coins ADD COLUMN IF NOT EXISTS holding_amount REAL DEFAULT 0")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS tracked_nfts (
                 id SERIAL PRIMARY KEY,
@@ -98,11 +102,15 @@ def init_db():
                 alert_percent REAL DEFAULT 5.0,
                 last_floor_price REAL,
                 last_checked_at TEXT,
+                holding_amount REAL DEFAULT 0,
+                is_custom_addon INTEGER DEFAULT 0,
                 created_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, nft_id)
             )
         """)
+        cur.execute("ALTER TABLE tracked_nfts ADD COLUMN IF NOT EXISTS holding_amount REAL DEFAULT 0")
+        cur.execute("ALTER TABLE tracked_nfts ADD COLUMN IF NOT EXISTS is_custom_addon INTEGER DEFAULT 0")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS alert_log (
                 id SERIAL PRIMARY KEY,
@@ -123,10 +131,12 @@ def init_db():
                 telegram_charge_id TEXT UNIQUE,
                 amount_stars INTEGER NOT NULL,
                 days_granted INTEGER NOT NULL,
+                payment_type TEXT DEFAULT 'premium',
                 created_at TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             )
         """)
+        cur.execute("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_type TEXT DEFAULT 'premium'")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS promo_codes (
                 code TEXT PRIMARY KEY,
@@ -289,7 +299,9 @@ def add_tracked_nft(user_id: int, nft_id: str, alert_percent: float = 5.0) -> bo
         cur = conn.cursor()
         if not is_premium(user_id):
             cur.execute(
-                "SELECT COUNT(*) as c FROM tracked_nfts WHERE user_id = %s",
+                # Купленные допники (is_custom_addon=1) не считаются в этот лимит —
+                # они отдельные, докупленные сверху слоты.
+                "SELECT COUNT(*) as c FROM tracked_nfts WHERE user_id = %s AND is_custom_addon = 0",
                 (user_id,),
             )
             count = cur.fetchone()["c"]
@@ -302,6 +314,23 @@ def add_tracked_nft(user_id: int, nft_id: str, alert_percent: float = 5.0) -> bo
             (user_id, nft_id, alert_percent, _now()),
         )
         return True
+
+
+def add_custom_nft_addon(user_id: int, nft_id: str, alert_percent: float = 5.0):
+    """
+    Добавляет NFT-коллекцию как платный допник — в обход обычного лимита
+    в 3 коллекции для бесплатных юзеров (эти слоты докуплены отдельно).
+    Если коллекция уже отслеживается обычным способом — просто помечает
+    существующую запись как допник (чтобы больше не считалась в лимит).
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO tracked_nfts (user_id, nft_id, alert_percent, is_custom_addon, created_at)
+               VALUES (%s, %s, %s, 1, %s)
+               ON CONFLICT (user_id, nft_id) DO UPDATE SET is_custom_addon = 1""",
+            (user_id, nft_id, alert_percent, _now()),
+        )
 
 
 def remove_tracked_nft(user_id: int, nft_id: str):
@@ -376,6 +405,26 @@ def set_nft_alert_percent(user_id: int, nft_id: str, percent: float):
         )
 
 
+def set_coin_holding(user_id: int, coin_id: str, amount: float):
+    """Сколько единиц монеты юзер держит — для расчёта стоимости портфеля."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE tracked_coins SET holding_amount = %s WHERE user_id = %s AND coin_id = %s",
+            (amount, user_id, coin_id),
+        )
+
+
+def set_nft_holding(user_id: int, nft_id: str, amount: float):
+    """Сколько штук NFT из коллекции юзер держит — для расчёта стоимости портфеля."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE tracked_nfts SET holding_amount = %s WHERE user_id = %s AND nft_id = %s",
+            (amount, user_id, nft_id),
+        )
+
+
 def log_alert(user_id: int, item_type: str, item_id: str, item_name: str,
               change_percent: float, price: float):
     """item_type: 'coin' или 'nft' — сохраняет запись для истории в разделе «Алерты»."""
@@ -399,11 +448,12 @@ def get_recent_alerts(user_id: int, limit: int = 30) -> list:
         return [dict(r) for r in cur.fetchall()]
 
 
-def log_payment(user_id: int, telegram_charge_id: str, amount_stars: int, days_granted: int) -> bool:
+def log_payment(user_id: int, telegram_charge_id: str, amount_stars: int,
+                 days_granted: int, payment_type: str = "premium") -> bool:
     """
     Сохраняет платёж для аудита. Возвращает False, если такой charge_id
     уже был записан раньше — защита от повторной обработки одного и
-    того же платежа.
+    того же платежа. payment_type: 'premium' / 'donation' / 'custom_nft'.
     """
     with get_db() as conn:
         cur = conn.cursor()
@@ -414,9 +464,9 @@ def log_payment(user_id: int, telegram_charge_id: str, amount_stars: int, days_g
         if cur.fetchone():
             return False
         cur.execute(
-            """INSERT INTO payments (user_id, telegram_charge_id, amount_stars, days_granted, created_at)
-               VALUES (%s, %s, %s, %s, %s)""",
-            (user_id, telegram_charge_id, amount_stars, days_granted, _now()),
+            """INSERT INTO payments (user_id, telegram_charge_id, amount_stars, days_granted, payment_type, created_at)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (user_id, telegram_charge_id, amount_stars, days_granted, payment_type, _now()),
         )
         return True
 
@@ -517,11 +567,18 @@ def get_stats() -> dict:
         cur.execute("SELECT COUNT(*) as c FROM promo_redemptions")
         promo_redemptions = cur.fetchone()["c"]
 
+        cur.execute("""
+            SELECT payment_type, COALESCE(SUM(amount_stars), 0) as total, COUNT(*) as c
+            FROM payments GROUP BY payment_type
+        """)
+        by_type = {r["payment_type"]: {"total": r["total"], "count": r["c"]} for r in cur.fetchall()}
+
     return {
         "total_users": total_users,
         "premium_users": premium_users,
         "total_revenue_stars": revenue_row["total"],
         "total_payments": revenue_row["c"],
+        "revenue_by_type": by_type,
         "tracked_coins": tracked_coins,
         "tracked_nfts": tracked_nfts,
         "new_users_today": new_today,
