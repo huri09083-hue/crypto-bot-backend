@@ -70,3 +70,21 @@ async def get_popular_nfts() -> list[dict]:
             "change_24h": data.get("floor_price_in_usd_24h_percentage_change"),
         })
     return result
+
+
+async def search_nft(query: str) -> list[dict]:
+    """
+    Поиск NFT-коллекции по названию — для платного добавления нестандартных
+    коллекций сверх дефолтного списка. Использует тот же /search, что и поиск
+    монет — там есть отдельный массив "nfts" с коллекциями.
+    """
+    url = f"{COINGECKO_BASE}/search"
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(url, params={"query": query}, headers=_HEADERS)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("nfts", [])[:6]
+        return [
+            {"id": n["id"], "name": n["name"], "symbol": n.get("symbol"), "thumb": n.get("thumb")}
+            for n in results
+        ]
