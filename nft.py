@@ -88,3 +88,29 @@ async def search_nft(query: str) -> list[dict]:
             {"id": n["id"], "name": n["name"], "symbol": n.get("symbol"), "thumb": n.get("thumb")}
             for n in results
         ]
+
+
+async def get_nfts_details(nft_ids: list[str]) -> list[dict]:
+    """
+    То же, что get_popular_nfts, но для ЛЮБОГО списка id — нужно, чтобы
+    вкладка «Моё» показывала иконку/цену даже для нестандартных купленных
+    коллекций, которых нет в захардкоженном POPULAR_NFTS.
+    """
+    result = []
+    for nft_id in nft_ids:
+        data = await get_nft_data(nft_id)
+        if data is None:
+            result.append({
+                "id": nft_id, "name": nft_id, "image": None,
+                "floor_price_usd": None, "change_24h": None,
+            })
+            continue
+        floor = data.get("floor_price", {})
+        result.append({
+            "id": nft_id,
+            "name": data.get("name", nft_id),
+            "image": data.get("image", {}).get("small"),
+            "floor_price_usd": floor.get("usd"),
+            "change_24h": data.get("floor_price_in_usd_24h_percentage_change"),
+        })
+    return result
