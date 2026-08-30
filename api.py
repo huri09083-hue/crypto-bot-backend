@@ -189,6 +189,17 @@ async def search_nfts(query: str):
     return await nft.search_nft(query)
 
 
+@app.get("/nfts/details")
+async def nfts_details(ids: str):
+    """
+    Данные (иконка, floor price) для произвольного списка коллекций через
+    запятую — нужно вкладке «Моё» для нестандартных купленных коллекций,
+    которых нет в захардкоженном списке популярных.
+    """
+    id_list = [i for i in ids.split(",") if i.strip()]
+    return await nft.get_nfts_details(id_list)
+
+
 @app.post("/nfts/track")
 def add_nft(req: AddNftRequest):
     db.get_or_create_user(req.user_id)
