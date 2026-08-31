@@ -141,6 +141,12 @@ async def search(query: str):
     return await prices.search_coin(query)
 
 
+@app.get("/coin/{coin_id}/chart")
+async def coin_chart(coin_id: str, days: int = 7):
+    """История цены монеты — для графика в детальной карточке."""
+    return await prices.get_coin_chart(coin_id, days)
+
+
 @app.get("/user/{user_id}")
 def get_user(user_id: int):
     """Инфо о юзере: премиум статус + список отслеживаемых монет и NFT."""
