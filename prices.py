@@ -134,3 +134,32 @@ async def get_top_coins(limit: int = 100) -> list[dict]:
         }
         for c in data
     ]
+
+
+async def get_coin_chart(coin_id: str, days: int = 7) -> list[list[float]]:
+    """
+    История цены монеты — для графика в детальной карточке. Возвращает
+    список [timestamp_ms, price]. Бесплатно доступно на Demo-плане CoinGecko
+    (в отличие от истории floor price NFT, которая только в платных тарифах).
+    """
+    cache_key = f"chart:{coin_id}:{days}"
+    now = time.time()
+
+    cached = _cache.get(cache_key)
+    if cached and (now - cached[0]) < CACHE_TTL:
+        return cached[1]
+
+    url = f"{COINGECKO_BASE}/coins/{coin_id}/market_chart"
+    params = {"vs_currency": "usd", "days": days}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, params=params, headers=_HEADERS)
+            resp.raise_for_status()
+            data = resp.json()
+            prices_list = data.get("prices", [])
+            _cache[cache_key] = (now, prices_list)
+            return prices_list
+    except httpx.HTTPStatusError:
+        if cached:
+            return cached[1]
+        return []
